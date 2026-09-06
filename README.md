@@ -51,7 +51,7 @@ Three pitfalls each hit one in four submissions, and none of them is exotic: a `
 ## What is in [SKILL.md](SKILL.md)
 
 - The [reviewers' threat model](SKILL.md#the-reviewers-threat-model-in-five-sentences) in five sentences.
-- A [ten-minute grep audit](SKILL.md#ten-minute-audit-before-you-submit) to run before you submit.
+- A [grep audit](SKILL.md#grep-audit-before-you-submit) that runs in seconds and points at every place a reviewer will look.
 - Fifteen categories of pitfalls with the number of review comments raising each one, the mechanism, and the required fix in the maintainers' own idioms: files and state, secrets, bounds, QML rendering sinks, command construction, network and TLS, supply chain, privilege, processes and PIDs, Hyprland and shared configuration, local IPC, privacy and README claims, AI agents, removal, repository hygiene.
 - How the [automated security baseline](SKILL.md#the-automated-baseline) works and how to run it locally.
 - [Submission mechanics](SKILL.md#submission-mechanics-that-cost-people-days): exact-SHA binding, how to trigger re-validation, labels, `manual-setup`, the seven-day rule, Verify tickets.
@@ -79,7 +79,7 @@ git clone https://github.com/wbso-ai/omarchy-plugin-security-skill ~/.agents/ski
 
 The skill triggers on its own when you ask an agent to build, audit or harden an Omarchy plugin, or when you paste a marketplace review. You can also invoke it directly, for example `/omarchy-plugin-security` in Claude Code, with a request such as "audit this plugin before I submit it" or "here is the maintainer's finding, fix it across the tree".
 
-Without an agent, open [`SKILL.md`](SKILL.md), read the ten-minute audit and the checklist, and run the local baseline scan described under "The automated baseline".
+Without an agent, open [`SKILL.md`](SKILL.md), run the grep audit and read the checklist, and run the local baseline scan described under "The automated baseline".
 
 ## Scope and caveats
 

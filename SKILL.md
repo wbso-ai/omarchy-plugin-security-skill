@@ -23,9 +23,9 @@ Understand these and most of the rules below become obvious.
 
 Two things reviewers say constantly: "This finding does not state that the plugin is malicious", and "Verification applies only to this exact snapshot and is not a security audit". Do not argue intent; fix the mechanism.
 
-## Ten-minute audit before you submit
+## Grep audit before you submit
 
-Run these from the plugin root. Every hit is something a reviewer will find.
+Run these from the plugin root; they take seconds. Every hit is a place a reviewer will look, so the time goes into reading the hits, not into running them.
 
 ```bash
 # 1. QML Text sinks without an explicit format (the single most common finding, ~1000 comments)
