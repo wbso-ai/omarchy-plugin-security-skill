@@ -156,20 +156,19 @@ One bash trap when you move these helpers around: a function exists only *after*
 
 The environment is second best: `/proc/<pid>/environ` is readable by every same-user process, and it inherits into every child. Reviewers blocked "moved it from argv to `Process.environment`". It is accepted only where the CLI has no other route (`BW_SESSION` was accepted, then withdrawn).
 
-Fix: stdin or a private descriptor between fixed programs.
+Fix: stdin or a private descriptor between fixed programs. Reject CR, LF and NUL in the token before it touches any parser (`case $token in *$'\r'*|*$'\n'*|*$'\0'*) exit 1 ;; esac`). A quote or newline interpolated into `curl --config` is another config directive: curl will fetch that URL and send the `Authorization` header with it.
 
 ```bash
-# curl: header on stdin via a config file
-printf 'header = "Authorization: Bearer %s"\n' "$token" | curl -q -sS --config - --max-time 10 --max-filesize 1048576 -- "$url"
-# or
-curl -q -sS -H @- -- "$url" <<<"Authorization: Bearer $token"
+# curl: header on stdin. -H @- is a header list, not a config file.
+printf 'Authorization: Bearer %s\n' "$token" \
+  | /usr/bin/curl -q -sS -H @- --max-time 10 --max-filesize 1048576 -- "$url"
 # body on stdin
-jq -n --arg t "$token" '{token:$t}' | curl -q -sS --data-binary @- -- "$url"
+jq -n --arg t "$token" '{token:$t}' | /usr/bin/curl -q -sS --data-binary @- -- "$url"
 # clipboard and typing
-printf '%s' "$secret" | wl-copy
-printf '%s' "$text" | wtype -
+printf '%s' "$secret" | /usr/bin/wl-copy
+printf '%s' "$text" | /usr/bin/wtype -
 # keyring
-printf '%s' "$token" | secret-tool store --label='...' service myplugin
+printf '%s' "$token" | /usr/bin/secret-tool store --label='...' service myplugin
 ```
 
 In QML use `stdinEnabled: true` and `proc.write(...)` on the one process that needs it. `curl -q` (or `--disable`) must be the first option, or `~/.curlrc` can add a second URL or redirect and the `-H @-` header goes there too. `~/.curlrc` is a same-user file, but because a credential is on the line reviewers grade a missing `-q` as a blocker, not as hardening. Turn `set -x` off around the call: bash tracing prints the words of every command to stderr, and the widget's stderr lands in the journal.
@@ -203,13 +202,15 @@ Fix:
 
 ```bash
 # producer-side cap; with pipefail the substitution fails if cmd fails,
-# and a truncated result is detected by length (head read MAX + 1 bytes)
+# and a truncated result is detected by length (head read MAX + 1 bytes).
+# ${#out} counts characters, not bytes, unless LC_ALL=C.
 set -o pipefail
-out=$(/usr/bin/timeout -k 2 20 cmd args | /usr/bin/head -c $((MAX + 1))) || exit 1
-[ ${#out} -le $MAX ] || { echo 'output exceeds limit' >&2; exit 1; }
+export LC_ALL=C
+out=$(/usr/bin/timeout -k 2 20 -- cmd args | /usr/bin/head -c $((MAX + 1))) || exit 1
+[ ${#out} -le "$MAX" ] || { echo 'output exceeds limit' >&2; exit 1; }
 ```
 
-`PIPESTATUS` does not survive a `$(...)` substitution (the pipeline ran in a subshell), so do not try to read it afterwards; rely on `pipefail` plus the length check, or run the pipeline without a substitution and write to a held descriptor.
+`PIPESTATUS` does not survive a `$(...)` substitution (the pipeline ran in a subshell), so do not try to read it afterwards; rely on `pipefail` plus the length check, or run the pipeline without a substitution and write to a held descriptor. Without `LC_ALL=C`, a UTF-8 overflow can have `${#out} <= MAX` while `head -c` already read `MAX + 1` bytes.
 
 In QML replace `StdioCollector` with `SplitParser { splitMarker: "" }` and count bytes per chunk, then `signal(15)` and later `signal(9)` on overflow, or better, call a helper that already bounds everything and returns a small, strictly shaped JSON document. "No StdioCollector remains anywhere in the tree" is the cleanest accepted state. Bound stderr too and render it as PlainText with a small cap. In Python read both streams incrementally with `select` against a monotonic deadline and kill the process group on overflow.
 
@@ -322,7 +323,7 @@ if sha256(sock.getpeercert(binary_form=True)).hexdigest() != pinned:
 `CERT_NONE` here is not a weakness but the replacement of hostname verification with something stricter: exactly one certificate is allowed, the one a person looked at during setup. Re-pinning is an explicit, interactive step that shows the old and the new fingerprint, never automatic.
 - **SSRF and DNS rebinding** (~90 comments): any configurable or response-supplied URL can point at loopback, RFC1918, link-local, `.local`, or resolve differently between your check and the connection. Resolve, reject every non-global address, pin the validated address to the connection (`curl --resolve`) while keeping Host and SNI, and repeat per hop; disable environment proxies (`ProxyHandler({})`, `--noproxy '*'`); parse addresses with a real IP parser (`127.999.999.999` passed a regex).
 - **Fixed origins**: keep API bases as constants. A configurable `apiUrl` that receives the stored token is a blocker unless it is a prominent, consented development override with no credential reuse.
-- **curl hygiene**: `curl -q` first, `--proto =https --proto-redir =https`, `--max-time`, `--max-filesize` plus `head -c`, `--data-raw` so a leading `@` stays literal, URL as its own argument after `--`.
+- **curl hygiene**: `curl -q` first, `--proto =https --proto-redir =https`, `--max-time`, `--max-filesize` plus `head -c`, `-H @-` or `--data-raw` so a leading `@` stays literal, URL as its own argument after `--`. Do not `printf` a `--config` file from a token: a quote or newline is another directive.
 - **OAuth**: loopback callback on `127.0.0.1`, random `state` compared exactly, PKCE, a finite timeout, no token through a third-party proxy.
 
 ## 7. Supply chain and installation
@@ -430,7 +431,7 @@ Files and state
 - [ ] Traversal, deletion and archive extraction are bounded to an opened root and reject `..`, symlinks and special files
 
 Secrets
-- [ ] No token, password, OTP or private content in any argv or environment; stdin or `--config -` instead; `curl -q` first; tracing off
+- [ ] No token, password, OTP or private content in any argv or environment; stdin or `-H @-` instead; never interpolate a token into `curl --config`; `curl -q` first; tracing off
 - [ ] Credential files 0600 in 0700 directories from creation; keyring preferred; no silent plaintext fallback
 - [ ] Nothing secret in logs, errors, notifications or long-lived QML properties
 
@@ -472,33 +473,44 @@ Config, IPC, agents, removal, repo
 
 ### Descriptor-bound state file helper (Python)
 
-Invoke as an argv array from QML (`["python3", "-I", "-S", helperPath, "read", name]`) and keep `FileView` as a watcher. This is the shape that has been approved dozens of times; adapt the limits and the schema.
+Invoke as an argv array from QML (`["/usr/bin/python3", "-I", "-S", helperPath, "read", name]`) and keep `FileView` as a watcher. This is the shape that has been approved dozens of times; adapt the limits and the schema.
 
 ```python
 #!/usr/bin/python3 -I
-import os, re, stat, sys, json, secrets
+import os, pwd, re, stat, sys, json, secrets
 
 MAX_BYTES = 65536
+_COMPONENT = re.compile(r"[A-Za-z0-9._-]+")
+
+def _ok_component(name):
+    return bool(_COMPONENT.fullmatch(name)) and name not in (".", "..")
 
 def open_dir_chain(parts):
     """Walk from the passwd home with held descriptors; return the final dirfd."""
-    home = os.path.expanduser("~")
-    fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    if not parts or not all(_ok_component(p) for p in parts):
+        raise PermissionError("refusing directory chain")
+    # $HOME is attacker-controlled for a same-UID child; passwd is the trust anchor.
+    # The home itself may be a symlink (user config), so do not O_NOFOLLOW the anchor.
+    home = pwd.getpwuid(os.geteuid()).pw_dir
+    fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
-        for name in parts:
+        for i, name in enumerate(parts):
             try:
                 nfd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
             except FileNotFoundError:
-                os.mkdir(name, 0o700, dir_fd=fd)
+                try:
+                    os.mkdir(name, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
                 nfd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
             os.close(fd)
             fd = nfd
             st = os.fstat(fd)
             if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
                 raise PermissionError(f"untrusted directory component {name}")
-        st = os.fstat(fd)
-        if st.st_mode & 0o077:
-            os.fchmod(fd, 0o700)
+            # Only the plugin's own leaf directory is forced to 0700; XDG parents stay as set.
+            if i == len(parts) - 1 and st.st_mode & 0o077:
+                os.fchmod(fd, 0o700)
         return fd
     except BaseException:
         os.close(fd)
@@ -511,8 +523,9 @@ def read_bounded(dirfd, name):
         return None
     try:
         st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_nlink != 1 or st.st_size > MAX_BYTES:
-            raise PermissionError("refusing state file")
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_nlink != 1
+                or st.st_mode & 0o077 or st.st_size > MAX_BYTES):
+            raise PermissionError("refusing state file (expected 0600, owner-only, one link)")
         os.set_blocking(fd, True)
         data = b""
         while len(data) <= MAX_BYTES:
@@ -562,7 +575,7 @@ if __name__ == "__main__":
             payload = sys.stdin.buffer.read(MAX_BYTES + 1)
             if len(payload) > MAX_BYTES:
                 sys.exit(3)
-            json.loads(payload)          # validate the schema you expect here
+            json.loads(payload)          # then apply the same count/length/depth caps as a remote body
             write_atomic(dirfd, name, payload)
         else:
             sys.exit(2)
@@ -575,40 +588,45 @@ if __name__ == "__main__":
 ```bash
 #!/usr/bin/bash
 set -uo pipefail
-MAX=${MAX:-262144}
-# Own session, absolute deadline with KILL escalation, producer-side cap of MAX + 1,
-# stderr bounded separately instead of discarded.
-out=$(/usr/bin/setsid -w /usr/bin/timeout -k 2 20 "$@" 2> >(/usr/bin/head -c 4096 >&2) | /usr/bin/head -c $((MAX + 1)))
+MAX=262144
+ERR_MAX=4096
+export LC_ALL=C
+# Own session, absolute deadline with KILL escalation, producer-side cap of MAX + 1.
+# Do not take MAX from the environment. ${#out} counts bytes only under LC_ALL=C.
+# `--` so a command that starts with - is not an option to timeout.
+out=$(/usr/bin/setsid -w /usr/bin/timeout -k 2 20 -- "$@" 2> >(/usr/bin/head -c $((ERR_MAX + 1)) >&2) | /usr/bin/head -c $((MAX + 1)))
 rc=$?
 if [ ${#out} -gt "$MAX" ]; then echo "output exceeded ${MAX} bytes" >&2; exit 1; fi
 [ "$rc" -eq 0 ] || exit "$rc"
 printf '%s' "$out"
 ```
 
-With `pipefail`, `rc` is the first non-zero status in the pipeline, so a failing producer is not masked by a happy `head`; a producer killed by `SIGPIPE` after emitting more than `MAX` bytes is caught by the length check first.
+With `pipefail`, `rc` is the first non-zero status in the pipeline, so a failing producer is not masked by a happy `head`; a producer killed by `SIGPIPE` after emitting more than `MAX` bytes is caught by the length check first. Stderr is truncated at `ERR_MAX + 1` here; detecting overflow on that stream needs a second held descriptor or a Python supervisor. Bash `$(...)` also cannot hold NUL bytes.
 
 ### Bounded, pinned fetch (bash)
 
 ```bash
 fetch_json() {
   local url=$1 max=${2:-1048576}
+  [[ $max =~ ^[1-9][0-9]{0,8}$ ]] || return 1
+  case $token in *$'\r'*|*$'\n'*|*$'\0'*) return 1 ;; esac
   [[ $url =~ ^https://api\.example\.com/ ]] || return 1
-  printf 'header = "Authorization: Bearer %s"\n' "$token" \
-    | curl -q -sS --fail --config - --proto '=https' --proto-redir '=https' \
+  printf 'Authorization: Bearer %s\n' "$token" \
+    | /usr/bin/curl -q -sS --fail -H @- --proto '=https' --proto-redir '=https' \
         --max-time 10 --connect-timeout 5 --max-filesize "$max" --noproxy '*' -- "$url" \
-    | head -c $((max + 1))
+    | /usr/bin/head -c $((max + 1))
 }
 # call under set -o pipefail, and treat a result longer than $max as failure
 ```
 
-No `-L`, so a redirect is a failure rather than a token leak. Add `--resolve host:443:IP` after validating the address when the host is configurable.
+No `-L`, so a redirect is a failure rather than a token leak. Add `--resolve host:443:IP` after validating the address when the host is configurable. A PATH `curl` or `head` on this pipeline receives the response body (and can see the request); both binaries are pinned. Do not build a `--config` file with `printf … "$token"`: a quote or newline in the token is another curl directive.
 
 ### Process with bounded output in QML
 
 ```qml
 Process {
   id: proc
-  command: ["/usr/bin/bash", pluginDir + "/bin/bounded-cmd", "hyprctl", "-j", "clients"]
+  command: ["/usr/bin/bash", pluginDir + "/bin/bounded-cmd", "/usr/bin/hyprctl", "-j", "clients"]
   stdout: SplitParser {
     splitMarker: ""
     onRead: function(chunk) {
@@ -620,7 +638,7 @@ Process {
   onExited: function(code, status) { if (code === 0) root.apply(root.buf); root.buf = "" }
 }
 Timer { id: killTimer; interval: 2000; onTriggered: proc.signal(9) }
-Component.onDestruction: { proc.signal(15) }
+Component.onDestruction: { proc.signal(15); killTimer.start() }
 ```
 
 ### Signal by identity, not by number (Python)
@@ -629,17 +647,17 @@ Component.onDestruction: { proc.signal(15) }
 def identity(pid):
     with open(f"/proc/{pid}/stat", "rb") as f:
         fields = f.read().rsplit(b")", 1)[1].split()
-    return (pid, fields[19], os.stat(f"/proc/{pid}").st_uid)   # start time, uid
+    return (pid, fields[19], os.stat(f"/proc/{pid}").st_uid)   # starttime, uid
 
 def stop(pid, expected):
-    if identity(pid) != expected:
-        return False                     # PID was reused; refuse
-    fd = os.pidfd_open(pid)
+    fd = os.pidfd_open(pid)          # pin the process first; PIDs reuse
     try:
+        if identity(pid) != expected:
+            return False             # reused between capture and open; refuse
         signal.pidfd_send_signal(fd, signal.SIGTERM)
+        return True
     finally:
         os.close(fd)
-    return True
 ```
 
 ### The reviewer's one-line rules, for reference
