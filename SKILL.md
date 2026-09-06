@@ -9,7 +9,7 @@ This is a field guide distilled from the marketplace's own review history: all 5
 
 Read it before you write the plugin, not after the first `needs-fixes`. Every review round costs about a day, and reviewers re-read the whole tree on every push, so new findings appear after the first fix. Harden everything before the first submission.
 
-The goal of this skill is that a plugin passes manual review on the first round.
+The goal of this skill is that a plugin passes review on the first round.
 
 ## The reviewer's threat model in five sentences
 
@@ -202,12 +202,14 @@ The second-largest family. The rule: **the cap lives at the producer, before the
 Fix:
 
 ```bash
-# producer-side cap with the real exit status preserved
+# producer-side cap; with pipefail the substitution fails if cmd fails,
+# and a truncated result is detected by length (head read MAX + 1 bytes)
 set -o pipefail
-out=$(/usr/bin/timeout -k 2 20 cmd args | /usr/bin/head -c $((MAX + 1)))
-status=${PIPESTATUS[0]}
+out=$(/usr/bin/timeout -k 2 20 cmd args | /usr/bin/head -c $((MAX + 1))) || exit 1
 [ ${#out} -le $MAX ] || { echo 'output exceeds limit' >&2; exit 1; }
 ```
+
+`PIPESTATUS` does not survive a `$(...)` substitution (the pipeline ran in a subshell), so do not try to read it afterwards; rely on `pipefail` plus the length check, or run the pipeline without a substitution and write to a held descriptor.
 
 In QML replace `StdioCollector` with `SplitParser { splitMarker: "" }` and count bytes per chunk, then `signal(15)` and later `signal(9)` on overflow, or better, call a helper that already bounds everything and returns a small, strictly shaped JSON document. "No StdioCollector remains anywhere in the tree" is the cleanest accepted state. Bound stderr too and render it as PlainText with a small cap. In Python read both streams incrementally with `select` against a monotonic deadline and kill the process group on overflow.
 
@@ -474,7 +476,7 @@ Invoke as an argv array from QML (`["python3", "-I", "-S", helperPath, "read", n
 
 ```python
 #!/usr/bin/python3 -I
-import os, stat, sys, json, secrets
+import os, re, stat, sys, json, secrets
 
 MAX_BYTES = 65536
 
@@ -549,7 +551,7 @@ def write_atomic(dirfd, name, data: bytes):
 
 if __name__ == "__main__":
     op, name = sys.argv[1], sys.argv[2]
-    if not name.isalnum() and not all(c.isalnum() or c in "._-" for c in name) or name in (".", "..") or "/" in name:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name) or name in (".", ".."):
         sys.exit(2)
     dirfd = open_dir_chain([".local", "state", "my-plugin"])
     try:
@@ -571,16 +573,19 @@ if __name__ == "__main__":
 ### Bounded, supervised command (bash)
 
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/bash
+set -uo pipefail
 MAX=${MAX:-262144}
-# Own process group, absolute deadline, producer-side cap, real status preserved.
-out=$(/usr/bin/setsid -w /usr/bin/timeout -k 2 20 "$@" 2>/dev/null | /usr/bin/head -c $((MAX + 1))) || rc=$?
-rc=${PIPESTATUS[0]:-${rc:-0}}
+# Own session, absolute deadline with KILL escalation, producer-side cap of MAX + 1,
+# stderr bounded separately instead of discarded.
+out=$(/usr/bin/setsid -w /usr/bin/timeout -k 2 20 "$@" 2> >(/usr/bin/head -c 4096 >&2) | /usr/bin/head -c $((MAX + 1)))
+rc=$?
 if [ ${#out} -gt "$MAX" ]; then echo "output exceeded ${MAX} bytes" >&2; exit 1; fi
 [ "$rc" -eq 0 ] || exit "$rc"
 printf '%s' "$out"
 ```
+
+With `pipefail`, `rc` is the first non-zero status in the pipeline, so a failing producer is not masked by a happy `head`; a producer killed by `SIGPIPE` after emitting more than `MAX` bytes is caught by the length check first.
 
 ### Bounded, pinned fetch (bash)
 
@@ -593,6 +598,7 @@ fetch_json() {
         --max-time 10 --connect-timeout 5 --max-filesize "$max" --noproxy '*' -- "$url" \
     | head -c $((max + 1))
 }
+# call under set -o pipefail, and treat a result longer than $max as failure
 ```
 
 No `-L`, so a redirect is a failure rather than a token leak. Add `--resolve host:443:IP` after validating the address when the host is configurable.
@@ -607,6 +613,7 @@ Process {
     splitMarker: ""
     onRead: function(chunk) {
       root.buf += chunk
+      // .length counts UTF-16 units, so this is defense in depth; the byte cap is in the helper
       if (root.buf.length > root.maxBytes) { proc.signal(15); killTimer.start(); root.buf = "" }
     }
   }
