@@ -1,0 +1,77 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0b0d12;--panel:#12151c;--line:#232835;--fg:#f2f4f8;--mute:#8b95a7;--blue:#8ab4ff;--green:#5fd38d;--red:#ff6b6b;--amber:#ffc266}
+  html,body{margin:0;width:1600px;height:900px;overflow:hidden;background:var(--bg);color:var(--fg);font-family:Inter,"Liberation Sans",sans-serif}
+  .mono{font-family:"JetBrainsMono Nerd Font","JetBrains Mono","Liberation Mono",monospace}
+  .wrap{position:relative;width:1280px;height:720px;zoom:1.25;box-sizing:border-box;padding:96px 64px;display:grid;grid-template-columns:1fr 470px;column-gap:56px;
+    background:
+      radial-gradient(800px 420px at 100% 0%, rgba(138,180,255,.14), transparent 60%),
+      radial-gradient(600px 360px at 0% 100%, rgba(95,211,141,.10), transparent 60%),
+      var(--bg)}
+  .grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);background-size:32px 32px;mask-image:radial-gradient(900px 600px at 30% 40%,#000 30%,transparent 100%)}
+  .left{position:relative;display:flex;flex-direction:column;justify-content:space-between}
+  .eyebrow{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:600;letter-spacing:.14em;color:var(--mute);text-transform:uppercase}
+  .eyebrow .icon{height:30px;width:30px;display:block;margin-right:2px}.eyebrow .logo{height:30px;width:auto;display:block}.eyebrow .sep{width:1px;height:22px;background:var(--line);margin:0 4px}
+  h1{margin:26px 0 18px;font-size:58px;line-height:1;font-weight:800;letter-spacing:-.035em}
+  h1 small{display:block;font-size:30px;font-weight:600;letter-spacing:-.01em;color:var(--blue);margin-bottom:6px}
+  .sub{margin:0;font-size:22px;line-height:1.4;color:#c9d0dc;max-width:620px;font-weight:400}
+  .stats{display:flex;gap:44px;margin-top:auto}
+  .stat b{display:block;font-size:34px;font-weight:800;letter-spacing:-.03em}
+  .stat span{font-size:14px;color:var(--mute);font-weight:500}
+  .cmd{margin-top:22px;display:inline-flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;font-size:18px;color:#dfe5ee;box-shadow:0 18px 40px rgba(0,0,0,.4);width:fit-content}
+  .cmd .p{color:var(--green)}
+  .card{position:relative;align-self:center;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 30px 70px rgba(0,0,0,.55);overflow:hidden}
+  .card .bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:#0e1117}
+  .card .bar i{width:11px;height:11px;border-radius:50%;display:inline-block;background:#3a4150}
+  .card .bar i:nth-child(1){background:#ff5f57}.card .bar i:nth-child(2){background:#febc2e}.card .bar i:nth-child(3){background:#28c840}
+  .card .bar span{margin-left:8px;font-size:13px;color:var(--mute)}
+  .card .body{padding:18px 20px 20px;font-size:15.5px;line-height:1.75;color:#c9d0dc}
+  .row{display:flex;gap:12px;align-items:baseline}
+  .row .k{width:16px;flex:none;font-weight:700}
+  .bad .k{color:var(--red)} .good .k{color:var(--green)}
+  .bad{color:#a7afbd;text-decoration:line-through;text-decoration-color:rgba(255,107,107,.7)}
+  .good{color:#e8edf5}
+  .sep{height:1px;background:var(--line);margin:12px 0}
+  .lbl{display:inline-block;font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;margin-right:6px;letter-spacing:.02em}
+  .l-red{background:rgba(255,107,107,.14);color:var(--red);border:1px solid rgba(255,107,107,.35)}
+  .l-green{background:rgba(95,211,141,.14);color:var(--green);border:1px solid rgba(95,211,141,.35)}
+  .arrow{color:var(--mute);margin:0 6px}
+  .labels{margin-top:10px;display:flex;align-items:center}
+</style></head><body>
+<div class="wrap">
+  <div class="grid"></div>
+  <div class="left">
+    <div>
+      <div class="eyebrow"><img class="icon" alt="" src="data:image/png;base64,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"><svg class="logo" viewBox="0 0 1215 285" xmlns="http://www.w3.org/2000/svg" aria-label="Omarchy"><g fill="#e6e6e6"><path clip-rule="evenodd" d="m720 120h-15v15h-14.998v14.999l-60.002.001v15.002l90-.002v.002h.002l-.002 89.998h-15v15h-13v15h-17v-89.998h-45v90l-45-.002v-89.998h-14.998v-30h14.998v-15.002h-14.998v-30.001h14.998v-75h15v-14.997h15v-15.002h105.002zm-90-.001h45v-74.997h-45z" fill-rule="evenodd"/><path clip-rule="evenodd" d="m105 30.002h15v14.997h15v180.001h-15v15h-15v15.002h-75v-15.002h-15v-15h-15v-180.001h15v-14.997h15v-15.002h75zm-60 194.998h45v-179.998h-45z" fill-rule="evenodd"/><path d="m300 15h60v15h15v14.999h15v180.001h-15v15h-15v15h-15l-.004-209.998h-44.994v-.002h-.002v210.002h-45v-210h-44.998v179.997h-.002v30.003h-15v-15.002h-15v-15h-14.998v-180.001h14.998v-14.999h15v-15h60v-15h45z"/><path clip-rule="evenodd" d="m555 225h-15v15h-15v15h-15v-105.001l-44.998.001v105.002h-45.002v-105.002h-15v-30.001h15v-75h15.002v-14.997h15v-15.002h105zm-89.998-105.001h44.998v-74.997h-44.998z" fill-rule="evenodd"/><path d="m885 75h-15v15h-15v15h-15v-59.998h-45v179.998h45v-59.998h15v14.997h15v15.001h15v30h-15v15h-15v15.002l-105-.002v-210.001h14.998v-14.997h15.002v-15.002h105z"/><path d="m960 119.999h45v-104.999h15v15h15v14.999h15v75.001h15v15h-15v90h-15v15h-15v15h-15v-105h-45v105.002l-45-.002v-105h-30v-15h15v-15.001h15v-75h15v-14.997h15v-15.002h15z"/><path d="m1125 119.999h45v-104.999h15v15h15v15h15v180h-15v15h-15v15.002l-75-.002v-15h-15v-15h-15v-45.001h15v-14.997-.002h30v60h45v-75h-90v-105.001h15v-14.997h15v-15.002h15z"/></g></svg><span class="sep"></span> plugin marketplace · agent skill</div>
+      <h1><small>omarchy-plugin-security</small>Ship plugins that pass review first time.</h1>
+      <p class="sub">I analyzed 5,500 security review comments from the Omarchy plugin marketplace with Claude Fable, and turned every blocking finding into a rule, a fix and a checklist.</p>
+      <div class="cmd mono"><span class="p">$</span> npx skills add wbso-ai/omarchy-plugin-security-skill</div>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>5,130</b><span>submissions read</span></div>
+      <div class="stat"><b>5,500</b><span>maintainer reviews</span></div>
+      <div class="stat"><b>15</b><span>pitfall categories</span></div>
+      <div class="stat"><b>40</b><span>checklist items</span></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="bar"><i></i><i></i><i></i><span class="mono">Panel.qml · review</span></div>
+    <div class="body mono">
+      <div class="row bad"><span class="k">✗</span><span>Text { text: api.title }</span></div>
+      <div class="row good"><span class="k">✓</span><span>textFormat: Text.PlainText</span></div>
+      <div class="sep"></div>
+      <div class="row bad"><span class="k">✗</span><span>curl -H "Bearer $token"</span></div>
+      <div class="row good"><span class="k">✓</span><span>curl -q --config - &lt;&lt;&lt;"$hdr"</span></div>
+      <div class="sep"></div>
+      <div class="row bad"><span class="k">✗</span><span>StdioCollector { }</span></div>
+      <div class="row good"><span class="k">✓</span><span>cmd | head -c $((MAX+1))</span></div>
+      <div class="sep"></div>
+      <div class="row bad"><span class="k">✗</span><span>echo "$state" &gt; state.json</span></div>
+      <div class="row good"><span class="k">✓</span><span>mkstemp · fsync · rename</span></div>
+      <div class="labels"><span class="lbl l-red">needs-fixes</span><span class="arrow">→</span><span class="lbl l-green">approved-and-verified</span></div>
+    </div>
+  </div>
+</div>
+</body></html>
