@@ -57,13 +57,15 @@ grep -rn -E 'http://|verify=False|-k |--insecure|CERT_NONE' .   # -k is fine onl
 grep -rn -E 'curl .*\| *(ba)?sh|git clone|git pull|releases/latest|pip install|npm install|cargo install|yay |pacman |sudo |pkexec|systemctl|setcap' .
 find . -type f -exec file {} + | grep -E 'ELF|Mach-O|PE32|compiled'
 
-# 7. Agent instruction files and dev junk in the installable tree
-ls -a | grep -E 'AGENTS.md|CLAUDE.md|\.agents|\.claude|\.codex|\.gemini|\.gstack|\.wrangler|__pycache__|\.pyc'
+# 7. Agent instruction files and dev junk in the installable tree (recursive; ls -a only sees the root)
+find . \( -name 'AGENTS.md' -o -name 'CLAUDE.md' -o -name '.agents' -o -name '.claude' \
+     -o -name '.codex' -o -name '.gemini' -o -name '.gstack' -o -name '.wrangler' \
+     -o -name '__pycache__' -o -name '*.pyc' \)
 
 # 8. Files the scanner cannot handle (fails the whole baseline)
 find . -type f -size +512k ! -name preview.png
-grep -rlP '\x00' --include='*.qml' --include='*.sh' --include='*.py' --include='*.js' . 
-find . -iname '*install*' -o -iname '*setup*' -o -iname '*uninstall*' | grep -E '\.(png|jpg|gif|webp)$'
+grep -rlP '\x00' --include='*.qml' --include='*.sh' --include='*.py' --include='*.js' .
+find . \( -iname '*install*' -o -iname '*setup*' -o -iname '*uninstall*' \) | grep -E '\.(png|jpg|gif|webp)$'
 ```
 
 Then run the marketplace's own scanner locally (see "The automated baseline" below) and read "Submission mechanics" so you do not lose a day on a stale SHA.
@@ -78,16 +80,14 @@ The largest family of findings after QML text. The model the reviewers want is t
 
 Fix: a small helper invoked as an argv array that does one `open(O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC)`, `fstat`s that descriptor for `S_ISREG`, owner == uid, `st_nlink == 1`, no group/other write bits for anything sensitive, and size, then reads `limit + 1` bytes from the same descriptor and rejects overflow rather than truncating. See the Python helper in the appendix. Keep `FileView` as a watcher only: `preload: false`, `watchChanges: true`, `blockAllReads: true`, and never call `.text()` or `.data()` on it.
 
-Shell equivalent when a helper is overkill:
+Shell equivalent when a helper is overkill: GNU `dd` can pass `O_NOFOLLOW|O_NONBLOCK` at open. A bash redirect cannot.
 
 ```bash
 /usr/bin/dd if="$file" iflag=nofollow,nonblock,count_bytes,fullblock bs=1 count=$((MAX + 1)) status=none
-# or
-exec {fd}<"$file"; [[ $(stat -Lc %F /proc/self/fd/$fd) == "regular file" ]] || exit 1
-head -c $((MAX + 1)) <&$fd; exec {fd}<&-
+# exec {fd}<"$file"  # follows a planted symlink; reviewers flag this
 ```
 
-A bash `<` redirect and `exec 3<file` do not pass `O_NOFOLLOW`; reviewers correct this explicitly. `[[ -L $f || ! -f $f ]]` followed by `cat` is "three separate resolutions of the same name".
+A bash `<` redirect and `exec 3<file` do not pass `O_NOFOLLOW`; reviewers correct this explicitly. `[[ -L $f || ! -f $f ]]` followed by `cat` is "three separate resolutions of the same name". Use `dd` with those iflags, or the Python helper.
 
 Why `O_NONBLOCK` as well: `O_NOFOLLOW` only rejects a final symlink. A FIFO planted at the path blocks `open()` forever before your type check runs, and that hangs the shell. Add `O_NONBLOCK`, `fstat`, then clear it for regular files.
 
@@ -97,11 +97,13 @@ Why `O_NONBLOCK` as well: `O_NOFOLLOW` only rejects a final symlink. A FIFO plan
 
 Fix: create an unpredictable temporary in the destination directory with `mkstemp` or `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC` at mode 0600, `fchmod` before the first byte, write through that descriptor in a checked loop, `fsync`, then `rename`/`os.replace` (dirfd-relative), then `fsync` the directory. `rename(2)` replaces a symlink at the destination instead of writing through it. Unlink the temporary in a `finally` or an `EXIT` trap. Do not close the descriptor and reopen the temporary by name; do not `chmod` the path afterwards.
 
+Bash cannot keep the creating descriptor. `mktemp` then `>` or `mv` reopens the name; a same-UID process can swap a symlink in between, which is the race `write_atomic()` in the appendix exists to close. Use that helper for state and credential files. Do not ship:
+
 ```bash
+# rejected: second pathname resolution of $t
 umask 077
 t=$(mktemp -p "$(dirname -- "$dest")" .name.XXXXXXXXXX)
-trap 'rm -f -- "$t"' EXIT
-printf '%s' "$payload" >"$t"      # $t is fresh and ours; this is the one redirect that is fine
+printf '%s' "$payload" >"$t"
 mv -f -T -- "$t" "$dest"
 ```
 
@@ -119,13 +121,27 @@ Fix: walk from a trusted anchor with `openat(O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_C
 
 `/tmp/<plugin>`, `/tmp/<plugin>-$UID`, `/dev/shm/...`, `${XDG_RUNTIME_DIR:-/tmp}`, and a hard-coded `/run/user/1000`. Another account pre-creates the path, reads your snapshots, owns your socket, or replaces a script between write and execution. Fix: prefer stdout with no file. Otherwise `: "${XDG_RUNTIME_DIR:?}"` and fail closed, or `mktemp -d` with a trap; verify an existing directory component by component; use `$XDG_STATE_HOME`/`$XDG_CACHE_HOME` for persistent state. Never wildcard-delete in `/tmp`.
 
-### Repair the directory unconditionally, and its contents too
+### Repair the directory mode unconditionally; refuse unexpected entries
 
-Putting the `chmod` inside `if [[ "$mode" != "700" ]]` reads logically and is wrong. The mode of the directory says nothing about the files in it: a directory that is 700 today can hold 644 files from an earlier version, and those are then never repaired. Worse, a directory that was ever wider can hold entries you did not put there, and a symlink on the fixed name of your cache file sends every later write to a file the planter chose. Closing the directory does not clean that up. So the repair runs every time and removes anything that is not a regular file (`find` uses `lstat`, so a symlink is `-type l`):
+Putting the `chmod` inside `if [[ "$mode" != "700" ]]` reads logically and is wrong. The mode of the directory says nothing about the files in it: a directory that is 700 today can hold 644 files from an earlier version, and those are then never repaired. Worse, a directory that was ever wider can hold entries you did not put there, and a symlink on the fixed name of your cache file sends every later write to a file the planter chose. Closing the directory does not clean that up.
+
+Do not `find … ! -type f -exec rm -rf`. If `$dir` is a symlink to somewhere else, `find` walks the target and that delete is "a security check that deletes an object it did not create". Fail closed instead (`find` uses `lstat`, so a symlink is `-type l`):
 
 ```bash
-find "$dir" -mindepth 1 -maxdepth 1 ! -type f -exec rm -rf -- {} + 2>/dev/null
-find "$dir" -mindepth 1 -maxdepth 1 -type f -exec chmod 600 -- {} + 2>/dev/null
+# Refuse a symlink at $dir itself (find would walk the target) and any
+# non-regular entry inside. Deleting those is "a security check that deletes
+# an object it did not create".
+if [ -L "$dir" ] || [ ! -d "$dir" ]; then
+  echo "refusing $dir: not a real directory" >&2
+  exit 1
+fi
+if [ -n "$(find "$dir" -mindepth 1 -maxdepth 1 ! -type f -print -quit)" ]; then
+  echo "refusing $dir: non-regular entries present" >&2
+  exit 1
+fi
+# Tighten modes on regular files. chmod by name is still a race; fchmod on an
+# O_NOFOLLOW descriptor (the Python helper) is the closed form.
+find "$dir" -mindepth 1 -maxdepth 1 -type f -exec chmod -- 600 {} +
 ```
 
 Test the write path, because it takes two lines and reviewers do exactly this:
@@ -246,11 +262,13 @@ You can verify the mechanism without the shell: put `<img src="http://127.0.0.1:
 Fix: `textFormat: Text.PlainText` on every `Text`, including literal-only ones so the invariant is auditable, plus length and control-character caps at ingestion. Where styling is genuinely needed, use `Text.RichText` only with every variable escaped (`&` first, then `<`, `>`) and colours from a fixed table, or split into several PlainText items. A Markdown renderer must reject raw HTML and images; a denylist of a few tag shapes is "insufficient at this trust boundary". Audit mechanically:
 
 ```bash
-python3 - <<'EOF'
-import re, glob
+/usr/bin/python3 - <<'EOF'
+import os, re, glob
 for f in sorted(glob.glob('**/*.qml', recursive=True)):
-    src = open(f).read()
-    for m in re.finditer(r'\b(Text|Label|TextEdit)\s*\{', src):
+    if os.path.getsize(f) > 512 * 1024:
+        print(f"SKIP large {f}"); continue
+    src = open(f, encoding='utf-8').read()
+    for m in re.finditer(r'\b(Text|Label|TextEdit|StyledText)\s*\{', src):
         i, depth = m.end(), 1
         while i < len(src) and depth:
             depth += (src[i] == '{') - (src[i] == '}'); i += 1
@@ -396,9 +414,13 @@ The bot runs `security-baseline-scanner.mjs` against the exact commit. It is det
 Run it locally before every submission; it takes a minute and saves a day:
 
 ```bash
-git clone --depth 1 https://github.com/omacom/omarchy-plugin-marketplace /tmp/mp && cd /tmp/mp && npm ci --silent
-GITHUB_TOKEN=$(gh auth token) SHA=$(git -C /path/to/plugin rev-parse HEAD) \
-node --input-type=module -e '
+mp=$(/usr/bin/mktemp -d)
+/usr/bin/git clone --depth 1 https://github.com/omacom/omarchy-plugin-marketplace "$mp"
+cd "$mp" && /usr/bin/npm ci --silent
+# --depth 1 of default branch is convenience, not a supply-chain pin; checkout a
+# marketplace SHA when you have one. /tmp/mp is a predictable path; do not use it.
+GITHUB_TOKEN=$(/usr/bin/gh auth token) SHA=$(/usr/bin/git -C /path/to/plugin rev-parse HEAD) \
+/usr/bin/node --input-type=module -e '
 import { runSecurityBaseline } from "./scripts/security-baseline-scanner.mjs";
 const r = await runSecurityBaseline("https://github.com/<owner>/<repo>", process.env.SHA,
   { token: process.env.GITHUB_TOKEN, requiredPaths: ["Panel.qml"] });
@@ -424,7 +446,7 @@ console.log(r.outcome, JSON.stringify(r.findings, null, 2), JSON.stringify(r.cap
 Files and state
 - [ ] Every read of a file the plugin did not just create goes through a single `O_NOFOLLOW|O_NONBLOCK` descriptor, `fstat`-validated, read `cap + 1`
 - [ ] Every write is an exclusive random temporary in the destination directory, 0600 from creation, `fsync`, `rename`, directory `fsync`
-- [ ] Parent directories are walked with held descriptors; no `mkdir -p` on a chain you then trust; the permission repair runs unconditionally and removes non-regular entries
+- [ ] Parent directories are walked with held descriptors; no `mkdir -p` on a chain you then trust; directory mode is repaired unconditionally; non-regular entries are refused, not deleted
 - [ ] No fixed `/tmp` paths, no `${XDG_RUNTIME_DIR:-/tmp}`; fail closed instead
 - [ ] `FileView` is watcher-only (`preload: false`, `blockAllReads: true`)
 - [ ] Traversal, deletion and archive extraction are bounded to an opened root and reject `..`, symlinks and special files
