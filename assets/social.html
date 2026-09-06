@@ -1,0 +1,77 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0b0d12;--panel:#12151c;--line:#232835;--fg:#f2f4f8;--mute:#8b95a7;--blue:#8ab4ff;--green:#5fd38d;--red:#ff6b6b;--amber:#ffc266}
+  html,body{margin:0;width:1280px;height:640px;overflow:hidden;background:var(--bg);color:var(--fg);font-family:Inter,"Liberation Sans",sans-serif}
+  .mono{font-family:"JetBrainsMono Nerd Font","JetBrains Mono","Liberation Mono",monospace}
+  .wrap{position:relative;width:1280px;height:640px;box-sizing:border-box;padding:56px 64px;display:grid;grid-template-columns:1fr 470px;column-gap:56px;
+    background:
+      radial-gradient(800px 420px at 100% 0%, rgba(138,180,255,.14), transparent 60%),
+      radial-gradient(600px 360px at 0% 100%, rgba(95,211,141,.10), transparent 60%),
+      var(--bg)}
+  .grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);background-size:32px 32px;mask-image:radial-gradient(900px 600px at 30% 40%,#000 30%,transparent 100%)}
+  .left{position:relative;display:flex;flex-direction:column;justify-content:space-between}
+  .eyebrow{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:600;letter-spacing:.14em;color:var(--mute);text-transform:uppercase}
+  .eyebrow .dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 16px var(--green)}
+  h1{margin:26px 0 18px;font-size:58px;line-height:1;font-weight:800;letter-spacing:-.035em}
+  h1 small{display:block;font-size:30px;font-weight:600;letter-spacing:-.01em;color:var(--blue);margin-bottom:6px}
+  .sub{margin:0;font-size:22px;line-height:1.4;color:#c9d0dc;max-width:620px;font-weight:400}
+  .stats{display:flex;gap:44px;margin-top:auto}
+  .stat b{display:block;font-size:34px;font-weight:800;letter-spacing:-.03em}
+  .stat span{font-size:14px;color:var(--mute);font-weight:500}
+  .cmd{margin-top:22px;display:inline-flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;font-size:18px;color:#dfe5ee;box-shadow:0 18px 40px rgba(0,0,0,.4);width:fit-content}
+  .cmd .p{color:var(--green)}
+  .card{position:relative;align-self:center;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 30px 70px rgba(0,0,0,.55);overflow:hidden}
+  .card .bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:#0e1117}
+  .card .bar i{width:11px;height:11px;border-radius:50%;display:inline-block;background:#3a4150}
+  .card .bar i:nth-child(1){background:#ff5f57}.card .bar i:nth-child(2){background:#febc2e}.card .bar i:nth-child(3){background:#28c840}
+  .card .bar span{margin-left:8px;font-size:13px;color:var(--mute)}
+  .card .body{padding:18px 20px 20px;font-size:15.5px;line-height:1.75;color:#c9d0dc}
+  .row{display:flex;gap:12px;align-items:baseline}
+  .row .k{width:16px;flex:none;font-weight:700}
+  .bad .k{color:var(--red)} .good .k{color:var(--green)}
+  .bad{color:#a7afbd;text-decoration:line-through;text-decoration-color:rgba(255,107,107,.7)}
+  .good{color:#e8edf5}
+  .sep{height:1px;background:var(--line);margin:12px 0}
+  .lbl{display:inline-block;font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;margin-right:6px;letter-spacing:.02em}
+  .l-red{background:rgba(255,107,107,.14);color:var(--red);border:1px solid rgba(255,107,107,.35)}
+  .l-green{background:rgba(95,211,141,.14);color:var(--green);border:1px solid rgba(95,211,141,.35)}
+  .arrow{color:var(--mute);margin:0 6px}
+  .labels{margin-top:10px;display:flex;align-items:center}
+</style></head><body>
+<div class="wrap">
+  <div class="grid"></div>
+  <div class="left">
+    <div>
+      <div class="eyebrow"><span class="dot"></span> Agent skill · Omarchy plugin marketplace</div>
+      <h1><small>omarchy-plugin-security</small>Ship plugins that pass review first time.</h1>
+      <p class="sub">I analyzed 5,500 security review comments from the Omarchy plugin marketplace with Claude Fable, and turned every blocking finding into a rule, a fix and a checklist.</p>
+      <div class="cmd mono"><span class="p">$</span> npx skills add wbso-ai/omarchy-plugin-security-skill</div>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>5,130</b><span>submissions read</span></div>
+      <div class="stat"><b>5,500</b><span>maintainer reviews</span></div>
+      <div class="stat"><b>15</b><span>pitfall categories</span></div>
+      <div class="stat"><b>40</b><span>checklist items</span></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="bar"><i></i><i></i><i></i><span class="mono">Panel.qml · review</span></div>
+    <div class="body mono">
+      <div class="row bad"><span class="k">✗</span><span>Text { text: api.title }</span></div>
+      <div class="row good"><span class="k">✓</span><span>textFormat: Text.PlainText</span></div>
+      <div class="sep"></div>
+      <div class="row bad"><span class="k">✗</span><span>curl -H "Bearer $token"</span></div>
+      <div class="row good"><span class="k">✓</span><span>curl -q --config - &lt;&lt;&lt;"$hdr"</span></div>
+      <div class="sep"></div>
+      <div class="row bad"><span class="k">✗</span><span>StdioCollector { }</span></div>
+      <div class="row good"><span class="k">✓</span><span>cmd | head -c $((MAX+1))</span></div>
+      <div class="sep"></div>
+      <div class="row bad"><span class="k">✗</span><span>echo "$state" &gt; state.json</span></div>
+      <div class="row good"><span class="k">✓</span><span>mkstemp · fsync · rename</span></div>
+      <div class="labels"><span class="lbl l-red">needs-fixes</span><span class="arrow">→</span><span class="lbl l-green">approved-and-verified</span></div>
+    </div>
+  </div>
+</div>
+</body></html>
