@@ -19,7 +19,7 @@ Understand these and most of the rules below become obvious.
 2. **Everything you did not type yourself is input.** API responses, MPRIS metadata, window titles, device names, filenames, notification bodies, clipboard, `hyprctl` output, settings and state files, and the output of your own helper script. A window title is set by a web page. A USB stick sets its own product string.
 3. **Another process running as the same user is in scope.** Any sandboxed app, browser tab or other plugin can plant a symlink, a FIFO or an oversized file at a predictable path, read `/proc/<pid>/cmdline`, or connect to your socket. A 0700 directory does not remove that boundary. (Since 4 September 2026 pure same-UID availability issues are classed as hardening rather than blockers, but reviewers still ask for the fixes and everything involving secrets, privilege or remote data still blocks. Do them anyway.)
 4. **The check must be bound to the object you use.** A pathname test followed by a second open is a race. A byte cap applied after the data is in memory is "a consumer-after-allocation guard". A fix that moves the problem one layer over is called out as "the boundary moved rather than closed".
-5. **Documentation is not mitigation.** A README sentence, a warning, a comment, or a prompt instruction to an LLM never substitutes for code. A README claim the code does not honour is itself a finding.
+5. **Documentation is not mitigation.** A README sentence, a warning, a comment, or a prompt instruction to an LLM never substitutes for code. A README claim the code does not honour is itself a finding, in both directions: a README that promises a protection the code lacks, and a README that describes weaker or different behaviour than the code has ("trust on first use" in the README while the code demands an explicit pin). Reviewers verify the mechanism and treat the mismatch as the defect.
 
 Two things reviewers say constantly: "This finding does not state that the plugin is malicious", and "Verification applies only to this exact snapshot and is not a security audit". Do not argue intent; fix the mechanism.
 
@@ -32,6 +32,9 @@ Run these from the plugin root. Every hit is something a reviewer will find.
 grep -rn --include='*.qml' -E '\b(Text|Label|TextEdit|StyledText)\s*\{' . | wc -l
 grep -rn --include='*.qml' -c 'textFormat:' . 
 # Every Text needs textFormat: Text.PlainText. The python audit further down lists the misses.
+
+# 1b. Host-owned sinks the plugin cannot pin to PlainText: strip < > & and cap before these
+grep -rn --include='*.qml' -E 'tooltipText:|showTooltip\(|ConfirmDialog|PanelSectionHeader|PanelHero|\.label:|message:' .
 
 # 2. Whole-output collectors and shell strings (~800 and ~200 comments)
 grep -rn --include='*.qml' -E 'StdioCollector|bar\.run\(|execDetached\("|"bash", *"-l?c"|"sh", *"-c"' .
@@ -48,7 +51,7 @@ grep -rn -E 'Authorization|Bearer|--user |-u "|token|password|passwd|secret' . |
 # 5. Network without bounds or with redirects
 grep -rn -E 'curl ' . | grep -v -E 'max-filesize|head -c'
 grep -rn -E 'curl .*-L|urlopen|requests\.|fetch\(|XMLHttpRequest' .
-grep -rn -E 'http://|verify=False|-k |--insecure|CERT_NONE' .
+grep -rn -E 'http://|verify=False|-k |--insecure|CERT_NONE' .   # -k is fine only next to --pinnedpubkey
 
 # 6. Supply chain and privilege
 grep -rn -E 'curl .*\| *(ba)?sh|git clone|git pull|releases/latest|pip install|npm install|cargo install|yay |pacman |sudo |pkexec|systemctl|setcap' .
@@ -110,7 +113,7 @@ mv -f -T -- "$t" "$dest"
 
 `O_NOFOLLOW` protects only the final component. `mkdir -p`, `os.makedirs`, `Path.resolve()`, `mktemp -p dir`, `mv`, `chmod dir` all re-resolve the parents by pathname, and `~/.local/state` can be a symlink to another directory the attacker also owns, which still passes a uid/mode check. `mkdir -p -m 700` neither fails on nor re-modes an existing directory or symlink.
 
-Fix: walk from a trusted anchor with `openat(O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC)` one component at a time, `fstat` each held descriptor (owner == uid, real directory, 0700 for the plugin's own directory), `mkdirat` missing components, then do every `openat`, `mkstemp(dir_fd)`, `renameat`, `unlinkat`, `fchmod` relative to the held descriptor. `openat2` with `RESOLVE_NO_SYMLINKS` is the strongest form. In shell: refuse a symlinked directory and never repair permissions on a chain you have not verified.
+Fix: walk from a trusted anchor with `openat(O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC)` one component at a time, `fstat` each held descriptor (owner == uid, real directory, 0700 for the plugin's own directory), `mkdirat` missing components, then do every `openat`, `mkstemp(dir_fd)`, `renameat`, `unlinkat`, `fchmod` relative to the held descriptor. `openat2` with `RESOLVE_NO_SYMLINKS` is the strongest form. In shell: `mkdir -p -m 700` followed by an owner, type and `-L` check on the result is accepted for a plugin-owned state directory under the current policy, as long as you refuse (not repair) a symlink and every file inside is then opened `O_NOFOLLOW` through a helper; the full dirfd walk is what reviewers ask for the moment credentials, another principal or a privileged writer is involved.
 
 ### Shared /tmp and the `XDG_RUNTIME_DIR` fallback (~150 comments)
 
@@ -149,7 +152,7 @@ printf '%s' "$text" | wtype -
 printf '%s' "$token" | secret-tool store --label='...' service myplugin
 ```
 
-In QML use `stdinEnabled: true` and `proc.write(...)` on the one process that needs it. `curl -q` (or `--disable`) must be the first option, or `~/.curlrc` can add a second URL or redirect and the `-H @-` header goes there too. Turn `set -x` off around the call: bash tracing prints the words of every command to stderr, and the widget's stderr lands in the journal. Verify with `cat /proc/$(pgrep -n curl)/cmdline | tr '\0' ' '` while a request is running. If an upstream CLI only takes the secret as an argument, reviewers expect you to remove that feature or compute it locally (TOTP via `hmac`/`hashlib` was the accepted answer).
+In QML use `stdinEnabled: true` and `proc.write(...)` on the one process that needs it. `curl -q` (or `--disable`) must be the first option, or `~/.curlrc` can add a second URL or redirect and the `-H @-` header goes there too. `~/.curlrc` is a same-user file, but because a credential is on the line reviewers grade a missing `-q` as a blocker, not as hardening. Turn `set -x` off around the call: bash tracing prints the words of every command to stderr, and the widget's stderr lands in the journal. Verify with `cat /proc/$(pgrep -n curl)/cmdline | tr '\0' ' '` while a request is running. If an upstream CLI only takes the secret as an argument, reviewers expect you to remove that feature or compute it locally (TOTP via `hmac`/`hashlib` was the accepted answer).
 
 ### Files holding credentials or private content (~150 comments)
 
@@ -189,7 +192,7 @@ A default `SplitParser` is not a byte ceiling: it must buffer until the newline 
 
 `curl` with only `--max-time`; `response.read()`, `json.load(resp)`, `HTTPError.read()`; `xhr.responseText` measured after `DONE`; WebSocket frames without `max_size`; MQTT with the protocol's 268 MB variable length; downloads to disk before the hash is checked; pagination driven by the server's `has_more`. `--max-filesize` alone is advisory: it acts on a declared `Content-Length` and does nothing for a chunked body.
 
-Fix: `curl -q --fail --max-time 10 --max-filesize N -- "$url" | head -c $((N + 1))` under `pipefail`; Python `resp.read(MAX + 1)` and reject overflow; finite `max_size` on WebSockets; a small documented packet ceiling for MQTT; cap error bodies; a fail-closed page count and aggregate ceiling across pagination; a whole-transfer deadline (socket timeouts are per operation, so a trickling peer keeps you alive forever; DNS resolution must be inside the deadline too).
+Fix: `curl -q --fail --max-time 10 --max-filesize N -- "$url" | head -c $((N + 1))` under `pipefail`; Python `resp.read(MAX + 1)` and reject overflow; an explicit finite `max_size` on WebSockets (state the number; relying on a library default is graded as hardening at best); a small documented packet ceiling for MQTT; cap error bodies; a fail-closed page count and aggregate ceiling across pagination; a whole-transfer deadline (socket timeouts are per operation, so a trickling peer keeps you alive forever; DNS resolution must be inside the deadline too).
 
 ### After the byte cap: schema, cardinality and depth (~430 comments)
 
@@ -235,9 +238,9 @@ EOF
 
 MPRIS `artUrl`, API thumbnails, notification icons, tray icons, `data:` URIs, `file:///tmp/...` paths assigned to `Image.source` make the shell load local, loopback, private-network or huge resources and follow Qt's own redirects. `safeIconSource()` that rejects only `http` still passes `file:` and `qrc:`. A `stat` then `Image.source` is a race. Fix: fetch through a bounded helper (HTTPS host allowlist, no cross-origin redirect, byte and dimension caps, magic-byte format check) into an exclusively created plugin-owned file, then point `Image` at that file with `sourceSize`, or emit a bounded `data:` URL from validated bytes. Icons only via theme names or `image://` providers. `Loader` sources only from a fixed ID set.
 
-### Notification bodies
+### Notification summary and body
 
-`notify-send` and the FreeDesktop body are markup-capable. Escape or strip before sending stored or remote text.
+`notify-send`, `omarchy-notification-send` and the FreeDesktop protocol render summary and body with components the plugin cannot pin to PlainText, and the body is markup-capable. Strip `<`, `>`, `&` and control characters and cap the length before any stored or remote string (a camera name, a filename, a sender) goes into either field, in the script as well as in QML, because the script is also a CLI entry point. Do not store executable actions with a toast; a persisted `--exec` argv is replayed later without the user's consent at that moment.
 
 ## 5. Command construction and execution
 
@@ -249,7 +252,7 @@ Fix: remove the shell. `Process.command` and `Quickshell.execDetached` take arra
 
 ### Executables and environment (~180 comments)
 
-Bare `hyprctl`, `jq`, `curl`, `python3`, `#!/usr/bin/env bash`, `shutil.which()`, `command -v`, `~/.local/bin` fallbacks, and executable overrides from environment variables resolve through a PATH another process can prepend to. `bash -lc` reads profiles; a non-interactive bash still honours `BASH_ENV`; `PYTHONPATH`, `PERL5OPT`, `GIT_DIR` and `LD_PRELOAD` ride in with the inherited environment. Since the September policy this is hardening for same-UID-only cases, but it stays a blocker wherever a credential or privilege boundary is involved (a shadow `curl` receives the bearer token). Fix: absolute `/usr/bin/...` paths, `clearEnvironment: true` with an explicit minimal environment (`HOME`, `XDG_RUNTIME_DIR`, a fixed `PATH`), `/usr/bin/python3 -I -S`, bundled helpers resolved from the manifest directory, and a hostile-PATH regression test.
+Bare `hyprctl`, `jq`, `curl`, `python3`, `#!/usr/bin/env bash`, `shutil.which()`, `command -v`, `~/.local/bin` fallbacks, and executable overrides from environment variables resolve through a PATH another process can prepend to. `bash -lc` reads profiles; a non-interactive bash still honours `BASH_ENV`; `PYTHONPATH`, `PERL5OPT`, `GIT_DIR` and `LD_PRELOAD` ride in with the inherited environment. Since the September policy this is hardening for same-UID-only cases, but it stays a blocker wherever a credential or privilege boundary is involved (a shadow `curl` receives the bearer token). Fix: absolute `/usr/bin/...` paths, `clearEnvironment: true` with an explicit minimal environment (`HOME`, `XDG_RUNTIME_DIR`, a fixed `PATH`), `/usr/bin/python3 -I -S` for the system interpreter (for a venv interpreter at a fixed plugin-owned path use `-I` alone, since `-S` drops the site-packages the venv exists for), bundled helpers resolved from the manifest directory (`manifest.__sourceDir` and `Qt.resolvedUrl("bin/...")` relative to the plugin file are both accepted), and a hostile-PATH regression test. The rule covers every executable on the credential path, not only the one that receives the secret: the `openssl` that computes a certificate pin decides whether the key goes out at all.
 
 ### Option injection, URLs, stored actions
 
@@ -301,7 +304,7 @@ Bare `hyprctl`, `jq`, `curl`, `python3`, `#!/usr/bin/env bash`, `shutil.which()`
 ## 11. Local IPC, sockets, ports and D-Bus
 
 - **Unauthenticated local control** (~80 comments): a 0666 socket in `/tmp`, an abstract socket with no `SO_PEERCRED`, a loopback HTTP server that accepts state-changing POSTs without a token or `Origin`/`Host` check (any web page can send it simple requests), `/api/bootstrap` returning the write token, a fixed DevTools port, a D-Bus service that ignores the sender, a service bound to `0.0.0.0`. "Loopback binding is not authentication." Sockets go in a verified 0700 runtime directory at mode 0600 with a `SO_PEERCRED` UID check and a client cap; HTTP gets a random port, a per-session `randomBytes(24)` token compared in constant time, `Host`/`Origin` checks, JSON-only content types, a frame size and per-connection deadline before parsing.
-- **Public `IpcHandler` methods** (~25 comments): anything reachable via `omarchy-shell shell ...` that changes state, starts a capture or an agent, deletes, or returns sensitive data without user presence is a finding. Keep IPC to parameterless `open`/`close`/`toggle`, coerce the few parameters with `Number()`, and apply the same bounds inside the handler as at the UI.
+- **Public `IpcHandler` methods** (~25 comments): anything reachable via `omarchy-shell shell ...` that changes state, starts a capture or an agent, deletes, or returns sensitive data without user presence is a finding. Keep IPC to parameterless `open`/`close`/`toggle`, coerce the few parameters with `Number()`, and apply the same bounds inside the handler as at the UI. A parameterised method that only triggers the plugin's own normal, non-destructive behaviour (a test hook that opens a panel) is hardening; one that persists, captures, deletes, spends money or reaches a command or path sink is a blocker.
 - Line-framed sockets and native-messaging hosts need a byte ceiling before the newline buffering, a connection cap, and a deadline.
 
 ## 12. Privacy, disclosure and README claims
@@ -328,7 +331,7 @@ Bare `hyprctl`, `jq`, `curl`, `python3`, `#!/usr/bin/env bash`, `shutil.which()`
 - Hard-coded home paths (`/home/you/...`) break every other user and reviewers catch them; resolve helpers from `manifest.__sourceDir` or the plugin directory.
 - Manifest ID, `moduleName`, `ipcTarget`, README commands and install paths must agree; never reuse a built-in namespace like `omarchy.clock` (it collides with the stock widget's settings and IPC); a reserved or retired ID cannot be reused; `schemaVersion`, not `schemaversion`; no clone-only `omarchy.clonedFrom` unless it names the upstream SHA.
 - Licence file present; bundled fonts, icons, sounds and datasets need verifiable redistribution rights and upstream notices; vendored code keeps its notice.
-- Scanner limits: 512 KiB per text file, 8 MiB total, 1,000 files, and a literal NUL byte in a source file stops the baseline. Any file whose name contains `install`, `setup` or `uninstall` is read as text, so `setup.png` fails the scan; the preview must be `preview.png` at the root.
+- Scanner limits: 512 KiB per text file, 8 MiB total, 1,000 files, and a literal NUL byte in a source file stops the baseline. Any file whose name contains `install`, `setup` or `uninstall` is read as text, so `setup.png` fails the scan; the preview must be `preview.png` at the root (`preview.jpg`, `preview.jpeg`, `preview.webp` and `preview.avif` are also accepted by validation; any other name is simply not a preview).
 - Keep tests green; reviewers run them and notice when failing suites are deleted instead of fixed.
 
 ## The automated baseline
