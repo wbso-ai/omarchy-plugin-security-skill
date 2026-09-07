@@ -156,7 +156,7 @@ One bash trap when you move these helpers around: a function exists only *after*
 
 The environment is second best: `/proc/<pid>/environ` is readable by every same-user process, and it inherits into every child. Reviewers blocked "moved it from argv to `Process.environment`". It is accepted only where the CLI has no other route (`BW_SESSION` was accepted, then withdrawn).
 
-Fix: stdin or a private descriptor between fixed programs. Reject CR, LF and NUL in the token before it touches any parser (`case $token in *$'\r'*|*$'\n'*|*$'\0'*) exit 1 ;; esac`). A quote or newline interpolated into `curl --config` is another config directive: curl will fetch that URL and send the `Authorization` header with it.
+Fix: stdin or a private descriptor between fixed programs. Reject CR, LF and NUL in the token before it touches any parser (`case $token in *[$'\r\n']*) exit 1 ;; esac`). A quote or newline interpolated into `curl --config` is another config directive: curl will fetch that URL and send the `Authorization` header with it.
 
 ```bash
 # curl: header on stdin. -H @- is a header list, not a config file.
@@ -205,8 +205,8 @@ Fix:
 # and a truncated result is detected by length (head read MAX + 1 bytes).
 # ${#out} counts characters, not bytes, unless LC_ALL=C.
 set -o pipefail
-export LC_ALL=C
-out=$(/usr/bin/timeout -k 2 20 -- cmd args | /usr/bin/head -c $((MAX + 1))) || exit 1
+LC_ALL=C
+out=$(/usr/bin/timeout -k 2 -- 20 cmd args | /usr/bin/head -c $((MAX + 1))) || exit 1
 [ ${#out} -le "$MAX" ] || { echo 'output exceeds limit' >&2; exit 1; }
 ```
 
@@ -590,11 +590,11 @@ if __name__ == "__main__":
 set -uo pipefail
 MAX=262144
 ERR_MAX=4096
-export LC_ALL=C
+LC_ALL=C
 # Own session, absolute deadline with KILL escalation, producer-side cap of MAX + 1.
 # Do not take MAX from the environment. ${#out} counts bytes only under LC_ALL=C.
 # `--` so a command that starts with - is not an option to timeout.
-out=$(/usr/bin/setsid -w /usr/bin/timeout -k 2 20 -- "$@" 2> >(/usr/bin/head -c $((ERR_MAX + 1)) >&2) | /usr/bin/head -c $((MAX + 1)))
+out=$(/usr/bin/setsid -w /usr/bin/timeout -k 2 -- 20 "$@" 2> >(/usr/bin/head -c $((ERR_MAX + 1)) >&2) | /usr/bin/head -c $((MAX + 1)))
 rc=$?
 if [ ${#out} -gt "$MAX" ]; then echo "output exceeded ${MAX} bytes" >&2; exit 1; fi
 [ "$rc" -eq 0 ] || exit "$rc"
@@ -609,7 +609,7 @@ With `pipefail`, `rc` is the first non-zero status in the pipeline, so a failing
 fetch_json() {
   local url=$1 max=${2:-1048576}
   [[ $max =~ ^[1-9][0-9]{0,8}$ ]] || return 1
-  case $token in *$'\r'*|*$'\n'*|*$'\0'*) return 1 ;; esac
+  case $token in *[$'\r\n']*) return 1 ;; esac
   [[ $url =~ ^https://api\.example\.com/ ]] || return 1
   printf 'Authorization: Bearer %s\n' "$token" \
     | /usr/bin/curl -q -sS --fail -H @- --proto '=https' --proto-redir '=https' \
@@ -638,7 +638,7 @@ Process {
   onExited: function(code, status) { if (code === 0) root.apply(root.buf); root.buf = "" }
 }
 Timer { id: killTimer; interval: 2000; onTriggered: proc.signal(9) }
-Component.onDestruction: { proc.signal(15); killTimer.start() }
+Component.onDestruction: { proc.signal(15) }
 ```
 
 ### Signal by identity, not by number (Python)
