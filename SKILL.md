@@ -83,8 +83,9 @@ Shell equivalent when a helper is overkill:
 ```bash
 /usr/bin/dd if="$file" iflag=nofollow,nonblock,count_bytes,fullblock bs=1 count=$((MAX + 1)) status=none
 # or
-exec {fd}<"$file"; [[ $(stat -Lc %F /proc/self/fd/$fd) == "regular file" ]] || exit 1
-head -c $((MAX + 1)) <&$fd; exec {fd}<&-
+# Not `exec {fd}<"$file"`: a bash redirect does not pass O_NOFOLLOW, so it
+# happily reads through a planted symlink. The sentence below says as much;
+# it used to sit here as an equivalent anyway.
 ```
 
 A bash `<` redirect and `exec 3<file` do not pass `O_NOFOLLOW`; reviewers correct this explicitly. `[[ -L $f || ! -f $f ]]` followed by `cat` is "three separate resolutions of the same name".
@@ -251,7 +252,7 @@ python3 - <<'EOF'
 import re, glob
 for f in sorted(glob.glob('**/*.qml', recursive=True)):
     src = open(f).read()
-    for m in re.finditer(r'\b(Text|Label|TextEdit)\s*\{', src):
+    for m in re.finditer(r'\b(Text|Label|TextEdit|StyledText)\s*\{', src):
         i, depth = m.end(), 1
         while i < len(src) and depth:
             depth += (src[i] == '{') - (src[i] == '}'); i += 1
@@ -397,7 +398,7 @@ The bot runs `security-baseline-scanner.mjs` against the exact commit. It is det
 Run it locally before every submission; it takes a minute and saves a day:
 
 ```bash
-git clone --depth 1 https://github.com/omacom/omarchy-plugin-marketplace /tmp/mp && cd /tmp/mp && npm ci --silent
+mp=$(mktemp -d) && git clone --depth 1 https://github.com/omacom/omarchy-plugin-marketplace "$mp" && cd "$mp" && npm ci --silent
 GITHUB_TOKEN=$(gh auth token) SHA=$(git -C /path/to/plugin rev-parse HEAD) \
 node --input-type=module -e '
 import { runSecurityBaseline } from "./scripts/security-baseline-scanner.mjs";
